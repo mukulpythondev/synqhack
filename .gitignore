@@ -1,0 +1,22 @@
+# Environment and Secrets (CRITICAL: Never commit API keys or environment secrets)
+.env
+*.env
+
+# SQLite persistent state and temporary databases
+.state.db
+*.db
+*.sqlite3
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
