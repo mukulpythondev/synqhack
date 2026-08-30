@@ -476,7 +476,7 @@
             // Populate Panels
             document.getElementById('p-tkt-id').innerText = tid;
             document.getElementById('p-tkt-raw').innerText = JSON.stringify(rawTkt, null, 2);
-            document.getElementById('p-tkt-client').innerText = rawTkt.client_name || "Unknown";
+            document.getElementById('p-tkt-client').innerText = rawTkt.client || rawTkt.client_name || "Unknown";
 
             // Evidence Panel
             let evHtml = "";
@@ -597,11 +597,11 @@
             // WO & Comms
             if (wo) {
                 document.getElementById('p-wo-id').innerText = wo.work_order_id;
-                document.getElementById('p-wo-hub').innerText = wo.replacement_reg ? "Assigned via Allocator" : "N/A";
-                document.getElementById('p-wo-ts').innerText = wo.processed_at;
+                document.getElementById('p-wo-hub').innerText = wo.vehicle_reg ? "Assigned via Allocator" : "N/A";
+                document.getElementById('p-wo-ts').innerText = wo.created_at || "N/A";
             }
             if (comm) {
-                document.getElementById('p-comms-email').innerText = comm.recipient_email;
+                document.getElementById('p-comms-email').innerText = comm.recipient || "N/A";
                 document.getElementById('p-comms-sla').innerText = comm.sla_type || "Standard";
             }
 
