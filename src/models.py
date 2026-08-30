@@ -65,6 +65,19 @@ class CanonicalMaintenanceEvent:
     source_provenance: str
 
 @dataclass(frozen=True)
+class EvidenceCandidate:
+    evidence_id: str
+    source_file: str
+    thread_id: Optional[str]
+    timestamp: str
+    sanitized_snippet: str
+    retrieval_method: str
+    retrieval_rank: float
+    source_scope: str
+    detected_client: Optional[str] = None
+    detected_vehicle: Optional[str] = None
+
+@dataclass(frozen=True)
 class WorkOrderOutput:
     work_order_id: str
     ticket_id: str

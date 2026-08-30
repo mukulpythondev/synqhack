@@ -42,112 +42,10 @@ class ContextStore:
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self._init_tables()
-        self._ingest_unstructured_evidence()
         self._load_master_data()
-
-    def _ingest_unstructured_evidence(self):
-        cursor = self.conn.cursor()
-        from src.pii_scrubber import PIIScrubber
-        from src.evidence_filter import EvidenceFilter
-        import hashlib
-        import pandas as pd
-        
-        # 1. Ingest Emails
-        from src.config import EMAILS_DIR, MAINTENANCE_LOG_PATH
-        if EMAILS_DIR.exists():
-            for email_file in EMAILS_DIR.glob("*.txt"):
-                raw_content = email_file.read_text(encoding="utf-8", errors="ignore")
-                sanitized = PIIScrubber.scrub_text(raw_content)
-                stable_content = f"email_{email_file.name}_{sanitized}"
-                evidence_id = hashlib.sha256(stable_content.encode('utf-8')).hexdigest()
-                timestamp = "2026-08-01" 
-                
-                scope, detected_client = EvidenceFilter.classify_scope(sanitized)
-                
-                try:
-                    cursor.execute("""
-                        INSERT INTO evidence_metadata (evidence_id, source_file, thread_id, timestamp, source_scope, detected_client, sanitized_snippet)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (evidence_id, email_file.name, email_file.name, timestamp, scope.value, detected_client, sanitized))
-                    
-                    cursor.execute("""
-                        INSERT INTO evidence_fts (rowid, sanitized_snippet)
-                        VALUES (last_insert_rowid(), ?)
-                    """, (sanitized,))
-                except Exception:
-                    pass
-
-        # 2. Maintenance
-        if MAINTENANCE_LOG_PATH.exists():
-            df = pd.read_excel(MAINTENANCE_LOG_PATH)
-            for idx, row in df.iterrows():
-                notes = str(row.get('notes', ''))
-                if not notes or notes.lower() == 'nan':
-                    continue
-                sanitized = PIIScrubber.scrub_text(notes)
-                stable_content = f"maint_{idx}_{sanitized}"
-                evidence_id = hashlib.sha256(stable_content.encode('utf-8')).hexdigest()
-                
-                scope, detected_client = EvidenceFilter.classify_scope(sanitized)
-                
-                try:
-                    cursor.execute("""
-                        INSERT INTO evidence_metadata (evidence_id, source_file, thread_id, timestamp, source_scope, detected_client, sanitized_snippet)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (evidence_id, MAINTENANCE_LOG_PATH.name, f"maint_row_{idx}", "2026-08-01", scope.value, detected_client, sanitized))
-                    
-                    cursor.execute("""
-                        INSERT INTO evidence_fts (rowid, sanitized_snippet)
-                        VALUES (last_insert_rowid(), ?)
-                    """, (sanitized,))
-                except Exception:
-                    pass
-
-        # 3. Policy
-        policy_path = Path("candidate_bundle/dispatcher_interview.txt")
-        if policy_path.exists():
-            raw_content = policy_path.read_text(encoding="utf-8", errors="ignore")
-            sanitized = PIIScrubber.scrub_text(raw_content)
-            stable_content = f"dispatcher_policy_{sanitized}"
-            evidence_id = hashlib.sha256(stable_content.encode('utf-8')).hexdigest()
-            try:
-                cursor.execute("""
-                    INSERT INTO evidence_metadata (evidence_id, source_file, thread_id, timestamp, source_scope, detected_client, sanitized_snippet)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (evidence_id, policy_path.name, "interview", "2026-08-01", "GLOBAL", None, sanitized))
-                
-                cursor.execute("""
-                    INSERT INTO evidence_fts (rowid, sanitized_snippet)
-                    VALUES (last_insert_rowid(), ?)
-                """, (sanitized,))
-            except Exception:
-                pass
-                
-        self.conn.commit()
 
     def _init_tables(self):
         cursor = self.conn.cursor()
-        
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS evidence_metadata (
-                evidence_id TEXT PRIMARY KEY,
-                source_file TEXT,
-                thread_id TEXT,
-                timestamp TEXT,
-                source_scope TEXT,
-                detected_client TEXT,
-                detected_vehicle TEXT,
-                sanitized_snippet TEXT
-            )
-        """)
-        
-        self.conn.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(
-                sanitized_snippet,
-                content='evidence_metadata',
-                content_rowid='rowid'
-            )
-        """)
         
         # Vehicles Table (Authoritative RC Master)
         cursor.execute("""
@@ -215,63 +113,6 @@ class ContextStore:
         """)
 
         self.conn.commit()
-
-    def search_evidence(self, ticket, limit=10):
-        from src.models import EvidenceCandidate
-        from src.evidence_filter import EvidenceFilter
-        import sqlite3
-        
-        query = f"{ticket.client_name if ticket.client_name != 'UNKNOWN' else ''} {ticket.issue} {ticket.vehicle_reg_canonical or ''}".strip()
-        if not query:
-            return []
-            
-        # Clean query for FTS5 (escape quotes, remove special chars)
-        clean_query = query.replace('"', '').replace("'", "")
-        fts_query = " OR ".join([f'"{w}"' for w in clean_query.split() if w])
-        
-        cursor = self.conn.cursor()
-        try:
-            cursor.execute("""
-                SELECT m.evidence_id, m.source_file, m.thread_id, m.timestamp, m.source_scope, m.detected_client, m.detected_vehicle, m.sanitized_snippet, bm25(evidence_fts) as rank
-                FROM evidence_fts f
-                JOIN evidence_metadata m ON f.rowid = m.rowid
-                WHERE evidence_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-            """, (fts_query, limit))
-            
-            candidates = []
-            for row in cursor.fetchall():
-                candidates.append({
-                    'id': row['evidence_id'],
-                    'source_file': row['source_file'],
-                    'thread_id': row['thread_id'],
-                    'timestamp': row['timestamp'],
-                    'source_scope': row['source_scope'],
-                    'detected_client': row['detected_client'],
-                    'detected_vehicle': row['detected_vehicle'],
-                    'text': row['sanitized_snippet'],
-                    'rank': row['rank']
-                })
-                
-            allowed, rejected = EvidenceFilter.filter_candidates(ticket.ticket_id, ticket.client_name, candidates)
-            final_allowed = []
-            for c in allowed:
-                final_allowed.append(EvidenceCandidate(
-                    evidence_id=c['id'],
-                    source_file=c['source_file'],
-                    thread_id=c['thread_id'],
-                    timestamp=c['timestamp'],
-                    sanitized_snippet=c['text'],
-                    retrieval_method="FTS5",
-                    retrieval_rank=c['rank'],
-                    source_scope=c['source_scope'],
-                    detected_client=c['detected_client'],
-                    detected_vehicle=c['detected_vehicle']
-                ))
-            return final_allowed, rejected
-        except sqlite3.OperationalError:
-            return [], []
 
     def _load_master_data(self):
         self._load_fleet()

@@ -218,17 +218,7 @@ class GeminiPerception(PerceptionProvider):
     Activated ONLY when deterministic perception is ambiguous or low-confidence.
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, db_path: Optional[str] = None):
-        from src.config import STATE_DB_PATH
-        import os
-        self.db_path = str(db_path) if db_path else str(STATE_DB_PATH)
-        
-        # Kill switch
-        if str(os.getenv("GEMINI_ENABLED", "true")).lower() != "true":
-            self.api_key = None
-            self.client = None
-            return
-            
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         if api_key is not None:
             self.api_key = api_key if api_key != "" else None
         else:
@@ -244,27 +234,9 @@ class GeminiPerception(PerceptionProvider):
             except Exception as e:
                 logger.warning(f"Failed to initialize google-genai client: {e}")
                 self.client = None
-                
-        import sqlite3
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS gemini_cache (
-                    content_hash TEXT,
-                    model TEXT,
-                    schema_version TEXT,
-                    extraction_version TEXT,
-                    validated_facts_json TEXT,
-                    created_at TEXT,
-                    PRIMARY KEY (content_hash, model, schema_version)
-                )
-            """)
-            conn.commit()
 
     @property
     def is_available(self) -> bool:
-        import os
-        if str(os.getenv("GEMINI_ENABLED", "true")).lower() != "true":
-            return False
         return self.client is not None
 
     def extract_unstructured_facts(self, text: str) -> PerceptionFacts:
@@ -277,22 +249,6 @@ class GeminiPerception(PerceptionProvider):
 
         # PII Boundary: Strict Pre-Ingestion Scrubbing
         sanitized_prompt_text = PIIScrubber.scrub_text(text)
-
-        import hashlib, sqlite3, json
-        from datetime import datetime
-        content_hash = hashlib.sha256(sanitized_prompt_text.encode('utf-8')).hexdigest()
-        schema_v = "v1"
-        
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT validated_facts_json FROM gemini_cache WHERE content_hash=? AND model=? AND schema_version=?", (content_hash, self.model_name, schema_v))
-                row = cursor.fetchone()
-                if row:
-                    data = json.loads(row[0])
-                    return PerceptionFacts.model_validate(data)
-        except Exception as e:
-            logger.warning(f"Cache read error: {e}")
 
         system_instruction = (
             "You are a strict factual perception extractor for a freight transportation system. "
@@ -325,21 +281,6 @@ class GeminiPerception(PerceptionProvider):
             if response and response.text:
                 data = json.loads(response.text)
                 facts = PerceptionFacts.model_validate(data)
-                
-                # Write to Cache
-                try:
-                    with sqlite3.connect(self.db_path) as conn:
-                        cache_data = data
-                        cache_data["extraction_notes"] = "Loaded from cache"
-                        conn.execute("""
-                            INSERT OR REPLACE INTO gemini_cache (
-                                content_hash, model, schema_version, extraction_version, validated_facts_json, created_at
-                            ) VALUES (?, ?, ?, ?, ?, ?)
-                        """, (content_hash, self.model_name, schema_v, "1", json.dumps(cache_data), datetime.now().isoformat()))
-                        conn.commit()
-                except Exception as e:
-                    logger.warning(f"Cache write error: {e}")
-                    
                 return facts
         except Exception as e:
             logger.warning(f"Gemini unstructured extraction failed safely: {e}")
@@ -361,20 +302,6 @@ class GeminiPerception(PerceptionProvider):
             "Return structured JSON matching SchemaMappingProposal."
         )
 
-        import hashlib, sqlite3, json
-        from datetime import datetime
-        cache_key = hashlib.sha256(f"{unrecognized_key}_{sample_value}".encode('utf-8')).hexdigest()
-        
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT validated_facts_json FROM gemini_cache WHERE content_hash=? AND model=? AND schema_version=?", (cache_key, self.model_name, "schema_v1"))
-                row = cursor.fetchone()
-                if row:
-                    return json.loads(row[0]).get("proposed_key")
-        except Exception:
-            pass
-
         try:
             from google.genai import types
             response = self.client.models.generate_content(
@@ -390,16 +317,6 @@ class GeminiPerception(PerceptionProvider):
                 data = json.loads(response.text)
                 proposal = SchemaMappingProposal.model_validate(data)
                 if proposal.proposed_canonical_key in ALLOWED_CANONICAL_KEYS and proposal.confidence >= 0.7:
-                    try:
-                        with sqlite3.connect(self.db_path) as conn:
-                            conn.execute("""
-                                INSERT OR REPLACE INTO gemini_cache (
-                                    content_hash, model, schema_version, extraction_version, validated_facts_json, created_at
-                                ) VALUES (?, ?, ?, ?, ?, ?)
-                            """, (cache_key, self.model_name, "schema_v1", "1", json.dumps({"proposed_key": proposal.proposed_canonical_key}), datetime.now().isoformat()))
-                            conn.commit()
-                    except Exception:
-                        pass
                     return proposal.proposed_canonical_key
         except Exception as e:
             logger.warning(f"Gemini schema mapping proposal failed safely: {e}")
@@ -415,21 +332,6 @@ class GeminiPerception(PerceptionProvider):
             return None
 
         sanitized_query = PIIScrubber.scrub_text(query_text)
-        
-        import hashlib, sqlite3, json
-        from datetime import datetime
-        cache_key = hashlib.sha256(f"intent_{sanitized_query}".encode('utf-8')).hexdigest()
-        
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT validated_facts_json FROM gemini_cache WHERE content_hash=? AND model=? AND schema_version=?", (cache_key, self.model_name, "intent_v1"))
-                row = cursor.fetchone()
-                if row:
-                    return QueryIntent.model_validate(json.loads(row[0]))
-        except Exception:
-            pass
-
         prompt = (
             f"Analyze this operational query: '{sanitized_query}'. "
             "Extract target entity type (vehicle, client, corridor, rule), entity identifier, and intent topic. "
@@ -450,23 +352,16 @@ class GeminiPerception(PerceptionProvider):
             )
             if response and response.text:
                 data = json.loads(response.text)
-                
-                try:
-                    with sqlite3.connect(self.db_path) as conn:
-                        conn.execute("""
-                            INSERT OR REPLACE INTO gemini_cache (
-                                content_hash, model, schema_version, extraction_version, validated_facts_json, created_at
-                            ) VALUES (?, ?, ?, ?, ?, ?)
-                        """, (cache_key, self.model_name, "intent_v1", "1", json.dumps(data), datetime.now().isoformat()))
-                        conn.commit()
-                except Exception:
-                    pass
-                
                 return QueryIntent.model_validate(data)
         except Exception as e:
             logger.warning(f"Gemini query intent interpretation failed safely: {e}")
 
         return None
+
+
+# =====================================================================
+# 3. Perception Router (Deterministic First, Gemini Fallback)
+# =====================================================================
 
 class PerceptionRouter:
     """

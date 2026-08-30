@@ -33,6 +33,9 @@ from src.rule_engine import RuleEngine
 from src.allocator import ReplacementAllocator
 from src.adapter import DynamicTicketAdapter
 from src.pii_scrubber import PIIScrubber
+from src.logger import get_structured_logger
+
+logger = get_structured_logger("MeridianPipeline")
 
 class BreakdownPipeline:
     """
@@ -73,6 +76,112 @@ class BreakdownPipeline:
         for idx, raw_record in enumerate(raw_data):
             # Step 1: Ingestion, PII Scrub, Dynamic Adapter & Validation
             ticket = DynamicTicketAdapter.adapt_record(raw_record)
+            
+            # --- NEW GEMINI FALLBACK ARCHITECTURE ---
+            if not ticket.is_valid and ticket.quarantine_reason and ticket.quarantine_reason.startswith("DATA_INVALID/UNRESOLVED_VEHICLE") and ticket.issue:
+                # 1. Retrieve bounded evidence
+                allowed_evidence, rejected_evidence = self.store.search_evidence(ticket)
+                if rejected_evidence:
+                    audit_records.extend(rejected_evidence)
+                    logger.info(f"Rejected {len(rejected_evidence)} evidence snippets for cross-contamination during fallback", extra={"structured_data": {"ticket_id": ticket.ticket_id}})
+                
+                context_texts = [e.sanitized_snippet for e in allowed_evidence]
+                context_str = "\n".join(context_texts)
+                
+                # 2. Gemini perception (using bounded evidence + issue text)
+                from src.llm_adapter import PerceptionRouter
+                router = PerceptionRouter()
+                facts, extracted_by = router.extract_facts(ticket.issue, context_source=context_str)
+                
+                # 3. Deterministic entity validation
+                gemini_vehicle = facts.vehicle_reg
+                if gemini_vehicle and facts.confidence > 0.7:
+                    from src.normalizer import normalize_vehicle_reg
+                    canon_reg, is_valid_plate = normalize_vehicle_reg(gemini_vehicle)
+                    if is_valid_plate:
+                        # 4. Corroboration
+                        if self.store.get_vehicle(canon_reg) is not None:
+                            if allowed_evidence: # Must have corroborating evidence
+                                from dataclasses import replace
+                                ticket = replace(
+                                    ticket,
+                                    vehicle_reg_canonical=canon_reg,
+                                    is_valid=True,
+                                    quarantine_reason=None,
+                                    client_name=ticket.client_name or facts.client,
+                                    driver_id=ticket.driver_id or facts.driver_id
+                                )
+                                logger.info(f"Gemini safely extracted corroborated vehicle {canon_reg}", extra={"structured_data": {"ticket_id": ticket.ticket_id}})
+                                audit_records.append(AuditEvent(
+                                    event_id=f"AUD-{ticket.ticket_id}-GEMINI",
+                                    ticket_id=ticket.ticket_id,
+                                    step_number=1,
+                                    step_name="GEMINI_PERCEPTION_FALLBACK",
+                                    decision=f"VERIFIED: Extracted {canon_reg} from context",
+                                    input_data_summary={"extracted": facts.model_dump(), "method": extracted_by},
+                                    rule_applied="CORROBORATED_ENTITY",
+                                    source_citations=[e.source_file for e in allowed_evidence],
+                                    timestamp=ticket.created_at
+                                ))
+                            else:
+                                from dataclasses import replace
+                                ticket = replace(ticket, quarantine_reason="CONTEXT_UNCERTAIN/AMBIGUOUS_ENTITY (Gemini proposed vehicle but no corroborating evidence found)")
+                                audit_records.append(AuditEvent(
+                                    event_id=f"AUD-{ticket.ticket_id}-GEMINI",
+                                    ticket_id=ticket.ticket_id,
+                                    step_number=1,
+                                    step_name="GEMINI_PERCEPTION_FALLBACK",
+                                    decision="CONTEXT_UNCERTAIN: No corroborating evidence",
+                                    input_data_summary={"extracted": facts.model_dump(), "method": extracted_by},
+                                    rule_applied="REJECT_UNCORROBORATED",
+                                    source_citations=[],
+                                    timestamp=ticket.created_at
+                                ))
+                        else:
+                            from dataclasses import replace
+                            ticket = replace(ticket, quarantine_reason=f"CONTEXT_UNCERTAIN/AMBIGUOUS_ENTITY (Gemini proposed non-existent vehicle {canon_reg})")
+                            audit_records.append(AuditEvent(
+                                event_id=f"AUD-{ticket.ticket_id}-GEMINI",
+                                ticket_id=ticket.ticket_id,
+                                step_number=1,
+                                step_name="GEMINI_PERCEPTION_FALLBACK",
+                                decision=f"CONTEXT_UNCERTAIN: Non-existent vehicle {canon_reg}",
+                                input_data_summary={"extracted": facts.model_dump(), "method": extracted_by},
+                                rule_applied="REJECT_NONEXISTENT",
+                                source_citations=[],
+                                timestamp=ticket.created_at
+                            ))
+                    else:
+                        from dataclasses import replace
+                        ticket = replace(ticket, quarantine_reason=f"CONTEXT_UNCERTAIN/AMBIGUOUS_ENTITY (Gemini proposed invalid registration format)")
+                        audit_records.append(AuditEvent(
+                                event_id=f"AUD-{ticket.ticket_id}-GEMINI",
+                                ticket_id=ticket.ticket_id,
+                                step_number=1,
+                                step_name="GEMINI_PERCEPTION_FALLBACK",
+                                decision="CONTEXT_UNCERTAIN: Invalid registration format",
+                                input_data_summary={"extracted": facts.model_dump(), "method": extracted_by},
+                                rule_applied="REJECT_INVALID_FORMAT",
+                                source_citations=[],
+                                timestamp=ticket.created_at
+                            ))
+                else:
+                    if not ticket.quarantine_reason.startswith("CONTEXT_UNCERTAIN/AMBIGUOUS_ENTITY"):
+                        from dataclasses import replace
+                        ticket = replace(ticket, quarantine_reason=f"CONTEXT_UNCERTAIN/AMBIGUOUS_ENTITY (Gemini could not confidently extract vehicle)")
+                    
+                    audit_records.append(AuditEvent(
+                        event_id=f"AUD-{ticket.ticket_id}-GEMINI",
+                        ticket_id=ticket.ticket_id,
+                        step_number=1,
+                        step_name="GEMINI_PERCEPTION_FALLBACK",
+                        decision="CONTEXT_UNCERTAIN: Low confidence or unavailable",
+                        input_data_summary={"extracted": facts.model_dump() if hasattr(facts, "model_dump") else str(facts), "method": extracted_by},
+                        rule_applied="REJECT_LOW_CONFIDENCE",
+                        source_citations=[],
+                        timestamp=ticket.created_at
+                    ))
+            # ----------------------------------------
             
             # Quarantine Check
             if not ticket.is_valid:
@@ -119,7 +228,7 @@ class BreakdownPipeline:
                 quarantine_entry = QuarantineOutput(
                     ticket_id=ticket.ticket_id,
                     sanitized_record=ticket.sanitized_input_snapshot,
-                    reason_code=f"INSUFFICIENT_DATA (Unregistered client with unknown SLA contract: '{ticket.client_name}')",
+                    reason_code=f"CONTEXT_UNCERTAIN/UNKNOWN_CLIENT (Unregistered client with unknown SLA contract: '{ticket.client_name}')",
                     quarantined_at=ticket.created_at
                 )
                 quarantine_records.append(quarantine_entry)
@@ -138,8 +247,19 @@ class BreakdownPipeline:
                 continue
 
             # Step 2: Context Enrichment & Driver Safety Check
+            allowed_evidence, rejected_evidence = self.store.search_evidence(ticket)
+            
+            # Log rejected evidence if any
+            if rejected_evidence:
+                audit_records.extend(rejected_evidence)
+                logger.info(f"Rejected {len(rejected_evidence)} evidence snippets for cross-contamination", extra={"structured_data": {"ticket_id": ticket.ticket_id}})
+                
             is_driver_safe, driver_action, driver_citations = self.rule_engine.evaluate_driver_safety(ticket)
             
+            enrichment_citations = sorted(driver_citations) if not is_driver_safe else ["drivers_roster.csv", "fleet_master.csv"]
+            if allowed_evidence:
+                enrichment_citations.extend([f"FTS5: {e.source_file}" for e in allowed_evidence])
+                
             audit_records.append(AuditEvent(
                 event_id=f"AUD-{ticket.ticket_id}-02",
                 ticket_id=ticket.ticket_id,
@@ -148,7 +268,7 @@ class BreakdownPipeline:
                 decision=f"Enriched with driver {ticket.driver_id}, client {ticket.client_name}, vehicle {ticket.vehicle_reg_canonical}. Driver status: {driver_action}",
                 input_data_summary={"client": ticket.client_name, "driver_id": ticket.driver_id, "origin": ticket.origin_hub},
                 rule_applied="RULE_07_DRIVER_NIGHT_SOLO_RESTRICTION" if not is_driver_safe else "STANDARD_ENRICHMENT",
-                source_citations=sorted(driver_citations) if not is_driver_safe else ["drivers_roster.csv", "fleet_master.csv"],
+                source_citations=enrichment_citations,
                 timestamp=ticket.created_at
             ))
 
@@ -162,10 +282,17 @@ class BreakdownPipeline:
                 quarantine_entry = QuarantineOutput(
                     ticket_id=ticket.ticket_id,
                     sanitized_record=ticket.sanitized_input_snapshot,
-                    reason_code="INSUFFICIENT_DATA (No eligible replacement vehicle available)",
+                    reason_code="CONTEXT_UNCERTAIN/INSUFFICIENT_FLEET (No eligible replacement vehicle available)",
                     quarantined_at=ticket.created_at
                 )
                 quarantine_records.append(quarantine_entry)
+                
+                logger.warning("Insufficient fleet for ticket", extra={"structured_data": {
+                    "ticket_id": ticket.ticket_id,
+                    "stage": "ALLOCATE_REPLACEMENT",
+                    "status": "QUARANTINED",
+                    "quarantine_reason": "INSUFFICIENT_FLEET"
+                }})
                 continue
 
             assigned_vehicles.add(winner_vehicle.registration_canonical)
@@ -181,6 +308,14 @@ class BreakdownPipeline:
                 source_citations=sorted(alloc_citations),
                 timestamp=ticket.created_at
             ))
+
+            logger.info("Replacement vehicle allocated", extra={"structured_data": {
+                "ticket_id": ticket.ticket_id,
+                "stage": "ALLOCATE_REPLACEMENT",
+                "status": "SUCCESS",
+                "decision": winner_vehicle.registration_canonical,
+                "rule_id": "RULE_03_ORIGIN_PROXIMITY_50KM"
+            }})
 
             # Step 4: Generate Deterministic Work Order
             work_order = WorkOrderOutput(

@@ -141,7 +141,7 @@ def test_unknown_client_quarantined(tmp_path):
     assert len(wos) == 0
     assert len(comms) == 0
     assert len(quar) == 1
-    assert "INSUFFICIENT_DATA" in quar[0].reason_code
+    assert "CONTEXT_UNCERTAIN" in quar[0].reason_code
 
 # ---------------------------------------------------------------------
 # Test F — Invalid Gemini JSON Safe Degradation
@@ -193,3 +193,90 @@ def test_pii_scrubbed_before_llm_call():
     assert "[AADHAAR_MASKED]" in scrubbed
     assert "[PHONE_MASKED]" in scrubbed
     assert not PIIScrubber.contains_raw_pii(scrubbed)
+
+# ---------------------------------------------------------------------
+# Test I — Gemini Kill Switch (GEMINI_ENABLED)
+# ---------------------------------------------------------------------
+def test_gemini_kill_switch(monkeypatch):
+    """
+    Verifies that setting GEMINI_ENABLED=false overrides the API key
+    and forces the system into deterministic-only mode.
+    """
+    # 1. Key present + enabled
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.setenv("GEMINI_ENABLED", "true")
+    provider1 = GeminiPerception()
+    assert provider1.is_available is True
+
+    # 2. Key present + disabled
+    monkeypatch.setenv("GEMINI_ENABLED", "false")
+    provider2 = GeminiPerception()
+    assert provider2.is_available is False
+    assert "DETERMINISTIC-ONLY" in PerceptionRouter(gemini_provider=provider2).status_diagnostic
+
+    # 3. Key absent (already tested in Test A, defaults to deterministic-only)
+    
+    # 4. Disabled mode preserves outputs
+    ambiguous_text = "The unit had an issue"
+    router = PerceptionRouter(gemini_provider=provider2)
+    facts, provider_used = router.extract_facts(ambiguous_text)
+    assert provider_used == "deterministic" # forced deterministic fallback
+
+# ---------------------------------------------------------------------
+# Test J — Gemini Content-Hash Cache
+# ---------------------------------------------------------------------
+def test_gemini_content_hash_cache(tmp_path):
+    import sqlite3
+    import hashlib
+    db_path = str(tmp_path / "cache_test.db")
+    
+    # Init provider with mock client
+    provider = GeminiPerception(api_key="fake-key", db_path=db_path)
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    # Provide a valid JSON response so it gets cached
+    mock_response.text = '{"vehicle_reg": "UP37UP7482", "confidence": 0.99}'
+    mock_client.models.generate_content.return_value = mock_response
+    provider.client = mock_client
+    
+    # 1. same sanitized text -> same content hash
+    raw_text = "Please check UP37UP7482 with Aadhaar 6515 3369 7284"
+    scrubbed = PIIScrubber.scrub_text(raw_text)
+    expected_hash = hashlib.sha256(scrubbed.encode('utf-8')).hexdigest()
+    
+    # 2. First call invokes Gemini
+    facts1 = provider.extract_unstructured_facts(raw_text)
+    assert facts1.vehicle_reg == "UP37UP7482"
+    assert facts1.confidence == 0.99
+    assert mock_client.models.generate_content.call_count == 1
+    
+    # Check cache contains no raw PII (test 8)
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT content_hash, validated_facts_json FROM gemini_cache")
+        rows = cursor.fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == expected_hash
+        assert "6515" not in rows[0][1] # PII should not be in the stored facts JSON
+    
+    # 3 & 4. Second identical call uses cache and invokes Gemini zero times
+    mock_client.models.generate_content.reset_mock()
+    facts2 = provider.extract_unstructured_facts(raw_text)
+    assert facts2.vehicle_reg == "UP37UP7482" # test 7: cached facts validate
+    assert mock_client.models.generate_content.call_count == 0
+    
+    # 5. Different text creates different cache key (cache miss)
+    different_text = "Check vehicle UP12AB1234 instead"
+    facts3 = provider.extract_unstructured_facts(different_text)
+    assert mock_client.models.generate_content.call_count == 1
+    
+    # 6. Different schema version (we can simulate by mocking the db_path and manually changing the db schema_version)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE gemini_cache SET schema_version='v2' WHERE content_hash=?", (expected_hash,))
+        conn.commit()
+    
+    # Now it should cache miss because version is v1 internally but v2 in DB
+    mock_client.models.generate_content.reset_mock()
+    provider.extract_unstructured_facts(raw_text)
+    assert mock_client.models.generate_content.call_count == 1
+

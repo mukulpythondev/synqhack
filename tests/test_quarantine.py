@@ -25,8 +25,8 @@ def test_quarantined_tickets_in_queue():
 
     # Check reason codes
     q_map = {q.ticket_id: q for q in quarantine}
-    assert any(k in q_map["TKT-9101"].reason_code for k in ["MISSING_CRITICAL_FIELDS", "NULL_DISTANCE_METRIC", "UNRESOLVED_VEHICLE"])
-    assert any(k in q_map["TKT-9102"].reason_code for k in ["INVALID_DATE_FORMAT", "UNRESOLVED_VEHICLE", "MISSING_CRITICAL_FIELDS"])
+    assert any(k in q_map["TKT-9101"].reason_code for k in ["MISSING_TICKET_ID", "MISSING_DISTANCE", "UNRESOLVED_VEHICLE", "CONTEXT_UNCERTAIN"])
+    assert any(k in q_map["TKT-9102"].reason_code for k in ["INVALID_DATE_FORMAT", "UNRESOLVED_VEHICLE", "MISSING_DRIVER_ID"])
 
 def test_dynamic_adapter_edge_cases():
     """
@@ -76,6 +76,6 @@ def test_unknown_client_quarantine(tmp_path):
     assert len(wos) == 0
     assert len(comms) == 0
     assert len(quarantine) == 1
-    assert "INSUFFICIENT_DATA" in quarantine[0].reason_code
+    assert "CONTEXT_UNCERTAIN/UNKNOWN_CLIENT" in quarantine[0].reason_code
     assert "Acme Unknown Corp" in quarantine[0].reason_code
 

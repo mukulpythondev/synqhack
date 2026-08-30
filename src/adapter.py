@@ -78,7 +78,7 @@ class DynamicTicketAdapter:
                 severity=raw_sev,
                 client_name="",
                 is_valid=False,
-                quarantine_reason="MISSING_CRITICAL_FIELDS (Missing ticket_id)"
+                quarantine_reason="DATA_INVALID/MISSING_TICKET_ID (Missing ticket_id)"
             )
 
         # Parse Datetime
@@ -98,11 +98,12 @@ class DynamicTicketAdapter:
                 severity=raw_sev,
                 client_name=str(raw_client or ""),
                 is_valid=False,
-                quarantine_reason=f"INVALID_DATE_FORMAT ({date_err})"
+                quarantine_reason=f"DATA_INVALID/INVALID_DATE_FORMAT ({date_err})"
             )
 
-        # Normalize Vehicle Registration
+        # Validate Vehicle Registration
         canon_reg, is_valid_plate = normalize_vehicle_reg(str(raw_vehicle) if raw_vehicle else None)
+
         if not is_valid_plate:
             return CanonicalTicket(
                 ticket_id=ticket_id,
@@ -118,7 +119,7 @@ class DynamicTicketAdapter:
                 severity=raw_sev,
                 client_name=str(raw_client or ""),
                 is_valid=False,
-                quarantine_reason=f"UNRESOLVED_VEHICLE (Invalid registration '{raw_vehicle}')"
+                quarantine_reason=f"DATA_INVALID/UNRESOLVED_VEHICLE (Invalid registration '{raw_vehicle}')"
             )
 
         # Validate Critical Fields
@@ -138,7 +139,7 @@ class DynamicTicketAdapter:
                 severity=raw_sev,
                 client_name=str(raw_client or ""),
                 is_valid=False,
-                quarantine_reason="MISSING_CRITICAL_FIELDS (Missing or invalid driver_id)"
+                quarantine_reason="DATA_INVALID/MISSING_DRIVER_ID (Missing or invalid driver_id)"
             )
 
         origin_hub = normalize_hub_name(str(raw_origin) if raw_origin else None)
@@ -159,7 +160,7 @@ class DynamicTicketAdapter:
                 severity=raw_sev,
                 client_name=str(raw_client or ""),
                 is_valid=False,
-                quarantine_reason="MISSING_CRITICAL_FIELDS (Missing or unresolved origin/destination hub)"
+                quarantine_reason="DATA_INVALID/MISSING_HUB (Missing or unresolved origin/destination hub)"
             )
 
         if raw_km is None:
@@ -177,7 +178,7 @@ class DynamicTicketAdapter:
                 severity=raw_sev,
                 client_name=str(raw_client or ""),
                 is_valid=False,
-                quarantine_reason="NULL_DISTANCE_METRIC (km_from_origin_hub is null)"
+                quarantine_reason="DATA_INVALID/MISSING_DISTANCE (km_from_origin_hub is null)"
             )
 
         try:
@@ -197,7 +198,7 @@ class DynamicTicketAdapter:
                 severity=raw_sev,
                 client_name=str(raw_client or ""),
                 is_valid=False,
-                quarantine_reason=f"NULL_DISTANCE_METRIC (Non-numeric distance '{raw_km}')"
+                quarantine_reason=f"DATA_INVALID/MISSING_DISTANCE (Non-numeric distance '{raw_km}')"
             )
 
         client_name, client_state = normalize_client_name(str(raw_client) if raw_client else None)
