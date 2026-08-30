@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meridian Operations Console</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: rgba(30, 41, 59, 0.7);
+            --border-color: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent-blue: #3b82f6;
+            --accent-green: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-red: #ef4444;
+            --accent-purple: #8b5cf6;
+            --glow: 0 0 15px rgba(59, 130, 246, 0.5);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.08), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.08), transparent 25%);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Glassmorphism utilities */
+        .glass {
+            background: var(--panel-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+        }
+
+        /* Layout */
+        header {
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(15, 23, 42, 0.8);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-title { font-weight: 800; font-size: 1.5rem; letter-spacing: -0.5px; display: flex; align-items: center; gap: 10px; }
+        .header-title span { color: var(--accent-blue); text-shadow: var(--glow); }
+
+        .status-indicators { display: flex; gap: 1rem; font-size: 0.85rem; font-weight: 600; }
+        .indicator { padding: 0.4rem 0.8rem; border-radius: 20px; display: flex; align-items: center; gap: 6px; }
+        .ind-active { background: rgba(16, 185, 129, 0.1); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.2); }
+        .ind-amber { background: rgba(245, 158, 11, 0.1); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.2); }
+        
+        .main-container { display: flex; flex: 1; overflow: hidden; }
+
+        /* Sidebar */
+        .sidebar {
+            width: 300px;
+            padding: 1.5rem;
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            overflow-y: auto;
+        }
+        
+        .sidebar-title { font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted); font-weight: 800; letter-spacing: 1px; margin-bottom: 0.5rem; }
+
+        .ticket-btn {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            padding: 1rem;
+            border-radius: 8px;
+            color: var(--text-main);
+            text-align: left;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .ticket-btn:hover { background: rgba(255, 255, 255, 0.08); transform: translateY(-2px); }
+        .ticket-btn.active { border-color: var(--accent-blue); box-shadow: 0 0 10px rgba(59, 130, 246, 0.2); background: rgba(59, 130, 246, 0.1); }
+        .t-id { font-weight: 800; font-family: monospace; font-size: 1.1rem; }
+        .t-desc { font-size: 0.85rem; color: var(--text-muted); }
+
+        .action-btn {
+            background: var(--accent-blue);
+            color: white;
+            border: none;
+            padding: 1rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: var(--glow);
+            transition: all 0.2s;
+        }
+        .action-btn:hover { filter: brightness(1.2); transform: scale(1.02); }
+
+        /* Content Area */
+        .content {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        /* Timeline trace */
+        .execution-trace {
+            display: flex;
+            justify-content: space-between;
+            position: relative;
+            padding: 1rem 0;
+            margin-bottom: 1rem;
+        }
+        .execution-trace::before {
+            content: '';
+            position: absolute;
+            top: 30px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--border-color);
+            z-index: 0;
+        }
+        .trace-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            position: relative;
+            z-index: 1;
+            width: 80px;
+            opacity: 0.4;
+            transition: all 0.3s ease;
+        }
+        .trace-node.active { opacity: 1; }
+        
+        .trace-dot {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: var(--bg-color);
+            border: 2px solid var(--text-muted);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 800;
+        }
+        
+        .trace-node.status-success .trace-dot { border-color: var(--accent-green); background: rgba(16, 185, 129, 0.2); box-shadow: 0 0 10px rgba(16, 185, 129, 0.3); }
+        .trace-node.status-warning .trace-dot { border-color: var(--accent-amber); background: rgba(245, 158, 11, 0.2); box-shadow: 0 0 10px rgba(245, 158, 11, 0.3); }
+        .trace-node.status-error .trace-dot { border-color: var(--accent-red); background: rgba(239, 68, 68, 0.2); box-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
+        
+        .trace-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; text-align: center; color: var(--text-muted); }
+        .trace-node.active .trace-label { color: var(--text-main); }
+
+        /* Dashboard Grid */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        /* Panels */
+        .panel { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; animation: fadeIn 0.4s ease forwards; }
+        .panel-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 0.8rem; margin-bottom: 0.5rem; }
+        .panel-title { font-weight: 800; color: var(--accent-blue); text-transform: uppercase; font-size: 0.9rem; letter-spacing: 1px; }
+        
+        .data-row { display: flex; flex-direction: column; gap: 4px; padding: 0.5rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .data-row:last-child { border-bottom: none; }
+        .data-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
+        .data-value { font-size: 0.95rem; font-weight: 400; word-break: break-word; font-family: monospace; }
+        
+        .badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
+        .bg-green { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); }
+        .bg-red { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+        .bg-amber { background: rgba(245, 158, 11, 0.2); color: var(--accent-amber); }
+        .bg-blue { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); }
+        .bg-purple { background: rgba(139, 92, 246, 0.2); color: var(--accent-purple); }
+
+        .list-item { background: rgba(0,0,0,0.2); padding: 0.8rem; border-radius: 6px; margin-bottom: 0.5rem; border-left: 3px solid var(--accent-blue); }
+        .list-item.rejected { border-left-color: var(--accent-red); }
+        .list-item.accepted { border-left-color: var(--accent-green); }
+
+        pre { background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; color: #a5b4fc; margin-top: 0.5rem; border: 1px solid var(--border-color); }
+        
+        .hidden { display: none !important; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Audit Timeline */
+        .audit-step { position: relative; padding-left: 1.5rem; padding-bottom: 1.5rem; border-left: 2px solid var(--border-color); }
+        .audit-step::before { content: ''; position: absolute; left: -6px; top: 0; width: 10px; height: 10px; border-radius: 50%; background: var(--accent-blue); }
+        .audit-step:last-child { border-left-color: transparent; }
+        .audit-step-title { font-weight: 800; font-size: 0.9rem; margin-bottom: 0.3rem; }
+        .audit-step-desc { font-size: 0.85rem; color: var(--text-muted); }
+        
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="header-title">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+            Meridian <span>Operations Console</span>
+        </div>
+        <div class="status-indicators">
+            <div class="indicator ind-active">◆ Deterministic Core: ACTIVE</div>
+            <div class="indicator ind-active">◆ PII Protection: ACTIVE</div>
+            <div class="indicator ind-active">◆ Evidence Boundary: ACTIVE</div>
+            <div class="indicator ind-amber">◆ Gemini: FALLBACK ONLY</div>
+            <div class="indicator ind-amber">◆ Human Approval: REQUIRED</div>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <!-- Sidebar -->
+        <div class="sidebar glass">
+            <div class="sidebar-title">Demo Scenarios</div>
+            
+            <div class="ticket-btn" data-ticket="TKT-0027" onclick="selectTicket('TKT-0027')">
+                <span class="t-id">TKT-0027</span>
+                <span class="t-desc">Successful Operational Resolution</span>
+                <span class="badge bg-green" style="width: fit-content; margin-top: 4px;">Success</span>
+            </div>
+            
+            <div class="ticket-btn" data-ticket="TKT-9102" onclick="selectTicket('TKT-9102')">
+                <span class="t-id">TKT-9102</span>
+                <span class="t-desc">Malformed / Quarantine</span>
+                <span class="badge bg-red" style="width: fit-content; margin-top: 4px;">Quarantine</span>
+            </div>
+            
+            <div class="ticket-btn" data-ticket="TKT-AMBIG-01" onclick="selectTicket('TKT-AMBIG-01')">
+                <span class="t-id">TKT-AMBIG-01</span>
+                <span class="t-desc">Ambiguous Hinglish (Gemini Fallback)</span>
+                <span class="badge bg-amber" style="width: fit-content; margin-top: 4px;">Fallback Evaluated</span>
+            </div>
+            
+            <!-- Real TKT-9101 for Cross Contamination demo -->
+            <div class="ticket-btn" data-ticket="TKT-9101" onclick="selectTicket('TKT-9101')">
+                <span class="t-id">TKT-9101</span>
+                <span class="t-desc">Cross-Client Contamination Rejection</span>
+                <span class="badge bg-amber" style="width: fit-content; margin-top: 4px;">Quarantine / Evidence Rejection</span>
+            </div>
+
+            <button class="action-btn" id="runBtn" onclick="runSimulation()">▶ Run Breakdown</button>
+            <div id="loading" style="display:none; text-align:center; color: var(--accent-blue); margin-top: 1rem; font-size: 0.85rem;">Processing pipeline...</div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="content" id="dashboard" style="display: none;">
+            
+            <!-- Timeline Trace -->
+            <div class="execution-trace glass" id="trace-container">
+                <!-- Nodes generated by JS -->
+            </div>
+
+            <div class="dashboard-grid">
+                
+                <!-- Ticket Info Panel -->
+                <div class="panel glass">
+                    <div class="panel-header">
+                        <span class="panel-title">Ticket Input & Validation</span>
+                        <span class="badge bg-blue" id="p-tkt-id"></span>
+                    </div>
+                    <div class="data-row"><span class="data-label">Raw Input</span><div class="data-value" id="p-tkt-raw"></div></div>
+                    <div class="data-row"><span class="data-label">Normalized Client</span><div class="data-value" id="p-tkt-client"></div></div>
+                    <div class="data-row"><span class="data-label">Sanitization Status</span><div class="data-value" id="p-tkt-pii"><span class="badge bg-green">PII SCRUBBED</span></div></div>
+                </div>
+
+                <!-- Evidence Panel -->
+                <div class="panel glass">
+                    <div class="panel-header">
+                        <span class="panel-title">FTS5 Evidence Retrieval</span>
+                        <span class="badge bg-purple" id="p-ev-count"></span>
+                    </div>
+                    <div id="p-evidence-list">
+                        <!-- Evidence items injected here -->
+                    </div>
+                </div>
+
+                <!-- Gemini Panel -->
+                <div class="panel glass" id="panel-gemini">
+                    <div class="panel-header">
+                        <span class="panel-title">Gemini Perception</span>
+                        <span class="badge" id="p-gemini-badge"></span>
+                    </div>
+                    <div class="data-row"><span class="data-label">Decision Reason</span><div class="data-value" id="p-gemini-reason"></div></div>
+                    <div class="data-row hidden" id="gemini-facts-row"><span class="data-label">Extracted Facts (Sanitized)</span><pre id="p-gemini-facts"></pre></div>
+                    <div class="data-row hidden" id="gemini-corr-row">
+                        <span class="data-label">Corroboration Pathway</span>
+                        <div class="data-value" style="font-size: 0.8rem; margin-top: 0.5rem; line-height: 1.5; color: var(--text-muted);">
+                            Candidate Fact<br>↓<br>Trusted Data Validation<br>↓<br>FTS5 Corroboration<br>↓<br><span id="p-gemini-final-status" style="font-weight: 800;"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Rule Engine Panel -->
+                <div class="panel glass" id="panel-rules">
+                    <div class="panel-header">
+                        <span class="panel-title">Deterministic Rule Engine</span>
+                        <span class="badge bg-blue">ACTIVE</span>
+                    </div>
+                    <div id="p-rule-list">
+                        <!-- Rules injected here -->
+                    </div>
+                </div>
+
+                <!-- Quarantine Panel (Only shown if quarantined) -->
+                <div class="panel glass hidden" id="panel-quarantine" style="border-color: rgba(239, 68, 68, 0.4);">
+                    <div class="panel-header">
+                        <span class="panel-title" style="color: var(--accent-red);">Quarantine Triggered</span>
+                        <span class="badge bg-red">DATA_INVALID / CONTEXT_UNCERTAIN</span>
+                    </div>
+                    <div class="data-row"><span class="data-label">Reason</span><div class="data-value" id="p-q-reason" style="color: #fca5a5;"></div></div>
+                    <div class="data-row"><span class="data-label">Impact</span><div class="data-value" style="color: var(--text-muted);">No Work Order created.<br>No outbound communication sent.<br>Safely halted.</div></div>
+                </div>
+
+                <!-- Allocator Panel -->
+                <div class="panel glass" id="panel-allocator">
+                    <div class="panel-header">
+                        <span class="panel-title">Allocator</span>
+                        <span class="badge bg-green" id="p-alloc-reg"></span>
+                    </div>
+                    <div class="data-row"><span class="data-label">Selected Vehicle</span><div class="data-value" id="p-alloc-details"></div></div>
+                    <div class="data-row"><span class="data-label">Rule Trigger</span><div class="data-value" id="p-alloc-rule"></div></div>
+                    <div class="data-row" style="margin-top: 1rem;"><span class="data-label" style="color: var(--accent-blue);">WHY THIS VEHICLE?</span><div class="data-value" id="p-alloc-why" style="font-size: 0.8rem; margin-top: 4px; line-height: 1.6;"></div></div>
+                </div>
+
+                <!-- Work Order Panel -->
+                <div class="panel glass" id="panel-wo">
+                    <div class="panel-header">
+                        <span class="panel-title">Work Order Generation</span>
+                        <span class="badge bg-green" id="p-wo-id"></span>
+                    </div>
+                    <div class="data-row"><span class="data-label">Replacement Hub</span><div class="data-value" id="p-wo-hub"></div></div>
+                    <div class="data-row"><span class="data-label">Timestamp</span><div class="data-value" id="p-wo-ts"></div></div>
+                </div>
+
+                <!-- Communication Panel -->
+                <div class="panel glass" id="panel-comms">
+                    <div class="panel-header">
+                        <span class="panel-title">Communication</span>
+                        <span class="badge bg-amber">HUMAN APPROVAL REQUIRED</span>
+                    </div>
+                    <div class="data-row"><span class="data-label">Status Flow</span>
+                        <div class="data-value" style="font-size: 0.8rem; margin-top: 4px; font-weight: 800; letter-spacing: 1px;">
+                            <span style="color: var(--accent-blue);">DRAFT</span> → <span style="color: var(--accent-amber);">APPROVAL</span> → SENT
+                        </div>
+                    </div>
+                    <div class="data-row"><span class="data-label">Recipient</span><div class="data-value" id="p-comms-email"></div></div>
+                    <div class="data-row"><span class="data-label">SLA Binding</span><div class="data-value" id="p-comms-sla"></div></div>
+                </div>
+
+                <!-- Full Audit Log Panel -->
+                <div class="panel glass" style="grid-column: 1 / -1;">
+                    <div class="panel-header">
+                        <span class="panel-title">Cryptographic Audit Timeline</span>
+                        <span class="badge bg-purple">VERIFIED</span>
+                    </div>
+                    <div id="p-audit-timeline" style="margin-top: 1rem;">
+                        <!-- Audit steps injected here -->
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Initial Blank State -->
+        <div class="content" id="blank-state" style="justify-content: center; align-items: center; text-align: center;">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--border-color)" stroke-width="1" style="margin-bottom: 1rem;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+            <h2 style="color: var(--text-muted); font-weight: 300;">Select a demo scenario from the sidebar</h2>
+            <p style="color: rgba(255,255,255,0.3); font-size: 0.85rem; margin-top: 0.5rem; max-width: 400px;">The system runs completely locally without live cloud calls, verifying deterministic paths based on actual generated outputs.</p>
+        </div>
+    </div>
+
+    <script>
+        // Data stores
+        let db = {
+            tickets: {},
+            quarantine: {},
+            workOrders: {},
+            comms: {},
+            audit: {} // grouped by ticket id
+        };
+
+        const traceStages = [
+            { id: 'input', label: 'Input' },
+            { id: 'validation', label: 'Validation' },
+            { id: 'context', label: 'Context' },
+            { id: 'evidence', label: 'Evidence' },
+            { id: 'gemini', label: 'Gemini' },
+            { id: 'rules', label: 'Rule Engine' },
+            { id: 'allocator', label: 'Allocator' },
+            { id: 'wo', label: 'Work Order' },
+            { id: 'comms', label: 'Comms' },
+            { id: 'audit', label: 'Audit' }
+        ];
+
+        let currentTicketId = null;
+
+        // Fetch and parse JSONL files
+        async function fetchJSONL(path) {
+            try {
+                const response = await fetch(path + '?v=' + Date.now());
+                if(!response.ok) return [];
+                const text = await response.text();
+                return text.trim().split('\n').filter(l=>l).map(line => JSON.parse(line));
+            } catch (e) {
+                console.error(`Failed to load ${path}`, e);
+                return [];
+            }
+        }
+
+        async function fetchJSON(path) {
+            try {
+                const response = await fetch(path + '?v=' + Date.now());
+                if(!response.ok) {
+                    console.error(`HTTP error! status: ${response.status} for ${path}`);
+                    return [];
+                }
+                return await response.json();
+            } catch (e) {
+                console.error(`Failed to load ${path}`, e);
+                return [];
+            }
+        }
+
+        async function initDB() {
+            // Load base tickets
+            const tickets1 = await fetchJSON('candidate_bundle/tickets.json');
+            const tickets2 = await fetchJSON('data/test_ambiguous.json');
+            
+            if (tickets1.length === 0) {
+                console.warn("WARNING: candidate_bundle/tickets.json returned empty or failed to load.");
+            }
+            
+            [...tickets1, ...tickets2].forEach(t => db.tickets[t.ticket_id] = t);
+
+            // Load Outputs
+            const q = await fetchJSONL('outputs/quarantine.jsonl');
+            q.forEach(x => db.quarantine[x.ticket_id] = x);
+
+            const w = await fetchJSONL('outputs/work_orders.jsonl');
+            w.forEach(x => db.workOrders[x.ticket_id] = x);
+
+            const c = await fetchJSONL('outputs/comms_pending.jsonl');
+            c.forEach(x => db.comms[x.ticket_id] = x);
+
+            const a = await fetchJSONL('audit/audit.jsonl');
+            a.forEach(x => {
+                if(!db.audit[x.ticket_id]) db.audit[x.ticket_id] = [];
+                db.audit[x.ticket_id].push(x);
+            });
+        }
+
+        function selectTicket(tid) {
+            document.querySelectorAll('.ticket-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelector(`[data-ticket="${tid}"]`).classList.add('active');
+            currentTicketId = tid;
+        }
+
+        async function runSimulation() {
+            if (!currentTicketId) return alert("Select a ticket first!");
+            
+            // UI state transition
+            document.getElementById('runBtn').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('blank-state').style.display = 'none';
+            document.getElementById('dashboard').style.display = 'none';
+
+            setTimeout(() => {
+                document.getElementById('runBtn').style.display = 'block';
+                document.getElementById('loading').style.display = 'none';
+                renderDashboard(currentTicketId);
+                document.getElementById('dashboard').style.display = 'flex';
+            }, 500);
+        }
+
+        function renderDashboard(tid) {
+            const rawTkt = db.tickets[tid] || { ticket_id: tid, fault: "Unknown" };
+            const q = db.quarantine[tid];
+            const wo = db.workOrders[tid];
+            const comm = db.comms[tid];
+            const aud = db.audit[tid] || [];
+            
+            // Build Trace
+            buildTrace(tid, q, wo, aud);
+
+            // Populate Panels
+            document.getElementById('p-tkt-id').innerText = tid;
+            document.getElementById('p-tkt-raw').innerText = JSON.stringify(rawTkt, null, 2);
+            document.getElementById('p-tkt-client').innerText = rawTkt.client_name || "Unknown";
+
+            // Evidence Panel
+            let evHtml = "";
+            let rejectedCount = 0;
+            let acceptedCount = 0;
+            
+            const rejectedEv = aud.filter(a => a.step_name === 'CROSS_CONTAMINATION_FILTER' && a.rule_applied === 'RULE_CLIENT_BOUNDARY');
+            rejectedEv.forEach(ev => {
+                rejectedCount++;
+                evHtml += `<div class="list-item rejected">
+                    <div style="font-size:0.75rem; color:var(--text-muted);">[REJECTED] ${ev.source_citations[0] || 'Unknown Source'}</div>
+                    <div style="font-weight:600; color:var(--accent-red); margin-top:4px;">Reason: ${ev.decision}</div>
+                </div>`;
+            });
+
+            // Evidence used in Corroboration or Deterministic enrichment
+            const usedEvSteps = aud.filter(a => a.source_citations && a.source_citations.length > 0 && a.step_name !== 'CROSS_CONTAMINATION_FILTER' && a.step_name !== 'VALIDATE_CLIENT_CONTRACT');
+            usedEvSteps.forEach(ev => {
+                ev.source_citations.forEach(c => {
+                    // Filter out standard non-unstructured sources if desired, but we'll show them.
+                    acceptedCount++;
+                    evHtml += `<div class="list-item accepted">
+                        <div style="font-size:0.75rem; color:var(--text-muted);">[ACCEPTED] ${c}</div>
+                        <div style="font-weight:600; color:var(--accent-green); margin-top:4px;">Used in ${ev.step_name}</div>
+                    </div>`;
+                });
+            });
+
+            if (evHtml === "") {
+                evHtml = "<div style='color:var(--text-muted); font-size: 0.85rem;'>No specific contextual evidence retrieved or required.</div>";
+            }
+            document.getElementById('p-evidence-list').innerHTML = evHtml;
+            document.getElementById('p-ev-count').innerText = `${acceptedCount} accepted / ${rejectedCount} rejected`;
+
+            // Gemini Panel
+            const geminiStep = aud.find(a => a.step_name === 'GEMINI_PERCEPTION_FALLBACK');
+            const pGemBadge = document.getElementById('p-gemini-badge');
+            const pGemReason = document.getElementById('p-gemini-reason');
+            const pGemFactsRow = document.getElementById('gemini-facts-row');
+            const pGemCorrRow = document.getElementById('gemini-corr-row');
+            
+            if (geminiStep) {
+                pGemBadge.className = "badge bg-amber";
+                pGemBadge.innerText = "GEMINI FALLBACK INVOKED";
+                pGemReason.innerText = "Deterministic perception could not confidently resolve the input.";
+                
+                pGemFactsRow.classList.remove('hidden');
+                pGemCorrRow.classList.remove('hidden');
+                
+                // Show sanitized structured facts
+                document.getElementById('p-gemini-facts').innerText = JSON.stringify(geminiStep.input_data_summary.extracted || geminiStep.input_data_summary, null, 2);
+                
+                const fStat = document.getElementById('p-gemini-final-status');
+                if (geminiStep.decision.includes("VERIFIED")) {
+                    fStat.innerText = "✅ VERIFIED & CORROBORATED";
+                    fStat.style.color = "var(--accent-green)";
+                } else {
+                    fStat.innerText = "❌ CONTEXT_UNCERTAIN (No Corroboration)";
+                    fStat.style.color = "var(--accent-red)";
+                }
+            } else {
+                pGemBadge.className = "badge bg-green";
+                pGemBadge.innerText = "GEMINI SKIPPED";
+                pGemReason.innerText = "Deterministic perception was sufficient.";
+                pGemFactsRow.classList.add('hidden');
+                pGemCorrRow.classList.add('hidden');
+            }
+
+            // Quarantine Panel
+            const pQuar = document.getElementById('panel-quarantine');
+            if (q) {
+                pQuar.classList.remove('hidden');
+                document.getElementById('p-q-reason').innerText = q.reason_code;
+                
+                // Hide Allocator, WO, Comms
+                document.getElementById('panel-allocator').classList.add('hidden');
+                document.getElementById('panel-wo').classList.add('hidden');
+                document.getElementById('panel-comms').classList.add('hidden');
+            } else {
+                pQuar.classList.add('hidden');
+                document.getElementById('panel-allocator').classList.remove('hidden');
+                document.getElementById('panel-wo').classList.remove('hidden');
+                document.getElementById('panel-comms').classList.remove('hidden');
+            }
+
+            // Rule Engine Panel
+            const rulesHtml = aud.filter(a => a.step_name !== 'GEMINI_PERCEPTION_FALLBACK' && a.step_name !== 'CROSS_CONTAMINATION_FILTER' && a.step_name !== 'VALIDATE_AND_QUARANTINE' && !a.step_name.includes('CREATE_WORK_ORDER') && !a.step_name.includes('DRAFT_CLIENT'))
+                .map(a => `
+                <div class="list-item">
+                    <div style="font-size:0.75rem; color:var(--accent-blue); font-weight:800;">${a.rule_applied}</div>
+                    <div style="font-size:0.85rem; margin-top:8px;">
+                        <strong>Input:</strong> ${JSON.stringify(a.input_data_summary)}<br>
+                        <strong>Source:</strong> ${a.source_citations.join(', ')}<br>
+                        <strong>Decision:</strong> ${a.decision}
+                    </div>
+                </div>
+            `).join('');
+            document.getElementById('p-rule-list').innerHTML = rulesHtml || "<span class='text-muted'>No deterministic rules applied in this scope.</span>";
+
+            // Allocator
+            const allocStep = aud.find(a => a.step_name === 'ALLOCATE_REPLACEMENT');
+            if (allocStep) {
+                document.getElementById('p-alloc-reg').innerText = allocStep.decision.split(' ')[0] || "SELECTED";
+                
+                let selectedHtml = `<strong>Selected:</strong> ${allocStep.decision}`;
+                document.getElementById('p-alloc-details').innerHTML = selectedHtml;
+                document.getElementById('p-alloc-rule').innerText = allocStep.rule_applied;
+                
+                // Extract 'Why Not' or use generic based on audit input_data_summary if available
+                let whyNotStr = allocStep.input_data_summary ? JSON.stringify(allocStep.input_data_summary.why_not_matrix || {}, null, 2) : "Ranked #1 according to rule constraints.";
+                
+                document.getElementById('p-alloc-why').innerHTML = `
+                    <div style="color:var(--accent-green); margin-bottom: 8px;">✔ Best Candidate Found</div>
+                    <pre style="background:rgba(0,0,0,0.4); border:none; color:var(--text-muted); font-size: 0.75rem;">${whyNotStr}</pre>
+                `;
+            }
+
+            // WO & Comms
+            if (wo) {
+                document.getElementById('p-wo-id').innerText = wo.work_order_id;
+                document.getElementById('p-wo-hub').innerText = wo.replacement_reg ? "Assigned via Allocator" : "N/A";
+                document.getElementById('p-wo-ts').innerText = wo.processed_at;
+            }
+            if (comm) {
+                document.getElementById('p-comms-email').innerText = comm.recipient_email;
+                document.getElementById('p-comms-sla').innerText = comm.sla_type || "Standard";
+            }
+
+            // Audit Timeline
+            document.getElementById('p-audit-timeline').innerHTML = aud.map(a => `
+                <div class="audit-step">
+                    <div class="audit-step-title">${a.step_name} <span style="float:right; font-size:0.75rem; font-weight:normal; color:var(--text-muted);">${new Date(a.timestamp).toISOString().replace('T',' ').substring(0,19)}</span></div>
+                    <div class="audit-step-desc">
+                        <strong>Decision:</strong> ${a.decision}<br>
+                        <strong>Rule:</strong> ${a.rule_applied}<br>
+                        <strong>Sources:</strong> ${a.source_citations && a.source_citations.length > 0 ? a.source_citations.join(', ') : 'None'}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function buildTrace(tid, q, wo, aud) {
+            const container = document.getElementById('trace-container');
+            
+            const isQuarantine = !!q;
+            const hasGemini = aud.some(a => a.step_name === 'GEMINI_PERCEPTION_FALLBACK');
+            const hasEvidence = aud.some(a => a.step_name === 'CROSS_CONTAMINATION_FILTER') || hasGemini || aud.some(a => a.source_citations && a.source_citations.length > 0 && a.source_citations.some(c => c.includes('FTS5') || c.includes('.txt')));
+
+            let html = '';
+            traceStages.forEach((stage, idx) => {
+                let statusClass = '';
+                let isActive = true;
+                let char = '';
+
+                if (stage.id === 'input') {
+                    statusClass = 'status-success';
+                    char = '✓';
+                } else if (stage.id === 'validation') {
+                    if (isQuarantine && aud.some(a => a.step_name === 'VALIDATE_AND_QUARANTINE')) {
+                        statusClass = 'status-error';
+                        char = '✕';
+                    } else {
+                        statusClass = 'status-success';
+                        char = '✓';
+                    }
+                } else if (stage.id === 'context' || stage.id === 'evidence') {
+                    if (isQuarantine && !hasEvidence && !hasGemini) {
+                        statusClass = '';
+                        isActive = false;
+                        char = '—';
+                    } else if (hasEvidence) {
+                        statusClass = 'status-success';
+                        char = '✓';
+                    } else {
+                        statusClass = '';
+                        isActive = false;
+                        char = '—';
+                    }
+                } else if (stage.id === 'gemini') {
+                    if (isQuarantine && !hasGemini) {
+                        statusClass = '';
+                        isActive = false;
+                        char = '—';
+                    } else if (hasGemini) {
+                        statusClass = 'status-warning';
+                        char = '⚡';
+                    } else {
+                        statusClass = '';
+                        isActive = false;
+                        char = '—';
+                    }
+                } else if (stage.id === 'rules' || stage.id === 'allocator' || stage.id === 'wo' || stage.id === 'comms') {
+                    if (isQuarantine) {
+                        statusClass = '';
+                        isActive = false;
+                        char = '—';
+                    } else {
+                        statusClass = 'status-success';
+                        char = '✓';
+                    }
+                } else if (stage.id === 'audit') {
+                    statusClass = 'status-success';
+                    char = '✓';
+                }
+
+                html += `
+                    <div class="trace-node ${isActive ? 'active' : ''} ${statusClass}">
+                        <div class="trace-dot" style="${!isActive ? 'border-color: var(--border-color); color: var(--text-muted);' : ''}">${char}</div>
+                        <div class="trace-label">${stage.label}</div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        // Boot
+        window.onload = initDB;
+
+    </script>
+</body>
+</html>
