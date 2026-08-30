@@ -15,7 +15,7 @@ def run():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     
     with socketserver.TCPServer(("", PORT), CORSRequestHandler) as httpd:
-        print(f"🚀 Meridian Operations Console running at http://localhost:{PORT}")
+        print(f" Meridian Operations Console running at http://localhost:{PORT}")
         print(f"Open http://localhost:{PORT}/index.html in your browser.")
         try:
             httpd.serve_forever()
